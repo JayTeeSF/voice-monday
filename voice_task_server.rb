@@ -8,7 +8,7 @@
 # ❸ PARSING
 #    • create_task  (due-date optional → defaults to coming Friday)
 # ❹ MAIN LOOP
-#    • sets up Vosk + FFmpeg, streams audio, enqueues commands
+#    • sets up VOSK + FFmpeg, streams audio, enqueues commands
 # ---------------------------------------------------------------------------
 
 require 'json'
@@ -17,12 +17,12 @@ require 'fileutils'
 
 begin
   require 'vosk'                     # binds FFI
-  raise NameError unless defined?(Vosk::Model)
+  raise NameError unless defined?(VOSK::Model)
 rescue LoadError, NameError
   # Fallback: use the dylib shipped inside the gem
   require 'rubygems'
   gem_lib = Gem.loaded_specs['vosk'].full_gem_path rescue nil
-  abort '❌  Vosk gem missing — run setup.sh' unless gem_lib
+  abort '❌  VOSK gem missing — run setup.sh' unless gem_lib
   ENV['VOSK_LIBRARY_PATH'] = File.join(gem_lib, 'libvosk.dylib')
   require 'vosk'
 end
@@ -107,12 +107,12 @@ end
 # ---------- voicestream → recogniser loop -----------------------------------
 def run_server(cfg)
   model_path = Dir[cfg['model_glob']].first or
-               abort 'Vosk model not found — run setup.sh'
+               abort 'VOSK model not found — run setup.sh'
 
   queue_init(cfg['queue_file'])
 
-  model = Vosk::Model.new(model_path)
-  rec   = Vosk::Recognizer.new(model, cfg['sample_rate'])
+  model = VOSK::Model.new(model_path)
+  rec   = VOSK::Recognizer.new(model, cfg['sample_rate'])
   cmd   = TTY::Command.new
 
   ffmpeg_cmd = cfg['ffmpeg_opts']
