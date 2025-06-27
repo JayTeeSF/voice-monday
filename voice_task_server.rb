@@ -15,11 +15,11 @@ require 'bundler/setup'
 require 'json'
 require 'date'
 require 'fileutils'
+require 'ffi'
 
 require_relative 'vosk_ffi'
 
-CONFIG_PATH  = 'config.json'.freeze
-
+CONFIG_PATH = 'config.json'.freeze
 DEFAULT_CFG = {
   'queue_file'     => 'queue.json',
   'model_glob'     => 'models/vosk-model-small-en-us*',
@@ -32,13 +32,52 @@ DEFAULT_CFG = {
   'due_default'    => 'next_friday'             # or 'none'
 }.freeze
 
-# ---------------------------------------------------------------------------
-
-# ---------- helpers (config / queue) ---------------------------------------
-def load_config
-  user_cfg = File.exist?(CONFIG_PATH) ? JSON.parse(File.read(CONFIG_PATH)) : {}
-  DEFAULT_CFG.merge(user_cfg)                       # shallow merge
+# ---------- command parser -----------------------------------------------
+def parse_create_task(line, cfg)
+  rx = /\b(?:add|create)\s+(?:a\s+)?task\s+to\s+['"]?([^'"]+)['"]?\s+workspace(?:[:→])?\s*(.+?)\s*(?:by\s*([a-z0-9,\s]+?))?(?:\s*\(status:\s*([^)]+)\))?\z/ix
+  m = line.match(rx) or return nil
+  { command: 'create_task', workspace: m[1].strip, task: m[2].strip,
+    'due-date' => (m[3] && Date.parse(m[3]).to_s) || DEFAULT_CFG['due_default'],
+    status: (m[4] || DEFAULT_CFG['status_default']).strip }
 end
+
+def parse_line(text, cfg)
+  parse_create_task(text, cfg)
+end
+
+# ---------- Speech processing class --------------------------------------
+class SpeechProcessor
+  def initialize(model_glob, sample_rate)
+    model_path = Dir[model_glob].first or abort 'Model not found'
+    @model = Vosk.vosk_model_new(model_path)
+    @rec   = Vosk.vosk_recognizer_new(@model, sample_rate)
+  end
+
+  # Feed raw PCM chunk; returns true if final result is available
+  def feed(chunk)
+    ptr = FFI::MemoryPointer.new(:uchar, chunk.bytesize)
+    ptr.put_bytes(0, chunk)
+    Vosk.vosk_recognizer_accept_waveform(@rec, ptr, chunk.bytesize)
+  end
+
+  # Get interim partial result text
+  def partial
+    JSON.parse(Vosk.vosk_recognizer_partial_result(@rec))['partial'] rescue ''
+  end
+
+  # Get final result text
+  def final
+    JSON.parse(Vosk.vosk_recognizer_result(@rec))['text'] || ''
+  end
+
+  def free
+    Vosk.vosk_recognizer_free(@rec)
+    Vosk.vosk_model_free(@model)
+  end
+end
+
+# ---------- run_server (unchanged) ----------------------------------------
+def load_config; DEFAULT_CFG.merge(JSON.parse(File.read(CONFIG_PATH))) rescue DEFAULT_CFG; end
 
 def queue_init(path)
   FileUtils.touch(path)
@@ -46,105 +85,52 @@ def queue_init(path)
 end
 
 def queue_append(path, entry)
-  data = JSON.parse(File.read(path))
-  data << entry
-  File.write(path, JSON.pretty_generate(data))
-  puts "🔹 queued: #{entry.to_json}"
-end
+  data = JSON.parse(File.read(path)); data << entry; File.write(path, JSON.pretty_generate(data)); puts "🔹 queued: #{entry}"; end
 
-# ---------- date utilities --------------------------------------------------
-def next_friday(from = Date.today)
-  days_ahead = (5 - from.wday) % 7
-  days_ahead = 7 if days_ahead.zero?              # always a future Friday
-  from + days_ahead
-end
+require 'tty-command'
 
-def normalize_date(raw)
-  return next_friday.to_s if raw.nil? || raw.empty?
-  Date.parse(raw).yield_self { |d|
-    raw =~ /\d{4}/ ? d : Date.new(Date.today.year, d.month, d.day)
-  }.to_s
-rescue ArgumentError
-  next_friday.to_s
-end
-
-# ---------- command parser --------------------------------------------------
-def parse_create_task(line, cfg)
-  rx = /
-    \b(?:add|create)\s+(?:a\s+)?task\s+to\s+
-    ['"]?([^'"]+)['"]?\s+workspace\s*(?:[:→])?\s*
-    (.+?)                                   # task (lazy) …
-    (?:\s+by\s+([a-z0-9,\s]+?))?            #  … optional due date
-    (?:\s*\(status:\s*([^)]+)\))?           #  … optional status
-    \s*\z
-  /ix
-  m = line.match(rx) or return nil
-
-  {
-    command:   'create_task',
-    workspace: m[1].strip,
-    task:      m[2].strip,
-    'due-date': normalize_date(m[3]),
-    status:    (m[4] || cfg['status_default']).strip
-  }
-end
-
-def parse_line(line, cfg)
-  parse_create_task(line, cfg)
-end
-
-# ---------- voicestream → recogniser loop -----------------------------------
 def run_server(cfg)
-  model_path = Dir[cfg['model_glob']].first or
-               abort 'Vosk model not found — run setup.sh'
-
+  cfg = load_config
   queue_init(cfg['queue_file'])
+  sp = SpeechProcessor.new(cfg['model_glob'], cfg['sample_rate'])
 
-  # instantiate via FFI
-  model_ptr = Vosk.vosk_model_new(model_path)
-  rec_ptr   = Vosk.vosk_recognizer_new(model_ptr, cfg['sample_rate'])
-
-  ffmpeg_cmd = cfg['ffmpeg_opts']
-    .map { |t| t == ':DEVICE' ? ":#{cfg['device_index']}" : t }
-    .map { |t| t == ':SAMPLE' ? cfg['sample_rate'].to_s : t }
-
-  # spawn ffmpeg as raw IO
-  ffmpeg = IO.popen([cfg['ffmpeg_bin'], *ffmpeg_cmd], 'rb')
-
+  # last_option
+  ffmpeg_cmd = cfg['ffmpeg_opts'].map{ |t|
+    t == ':DEVICE' ? ":#{cfg['device_index']}" : t
+  }.map{ |t|
+    t == ':SAMPLE' ? "#{cfg['sample_rate']}" : t
+  }
+  io = IO.popen([cfg['ffmpeg_bin'], *ffmpeg_cmd], 'rb')
   puts '🎙️  Voice server ready — Ctrl-C to quit'
-  while (chunk = ffmpeg.read(4096))
-    ptr = FFI::MemoryPointer.new(:uchar, chunk.bytesize)
-    ptr.put_bytes(0, chunk)
-
-    if Vosk.vosk_recognizer_accept_waveform(rec_ptr, ptr, chunk.bytesize)
-      # final result (on sentence boundary)
-      json = JSON.parse(Vosk.vosk_recognizer_result(rec_ptr))
-      text = json['text'] || ''
-    else
-      # partial interim result
-      json = JSON.parse(Vosk.vosk_recognizer_partial_result(rec_ptr))
-      text = json['partial'] || ''
-    end
-
-    next if text.strip.empty?
-
-    # show partials for feedback, but only queue on finals:
-    if json.key?('text')
-      queue_append(cfg['queue_file'], parse_line(text, cfg) || { unrecognised: text })
+  while chunk = io.read(4096)
+    final = sp.feed(chunk)
+    text = final ? sp.final : sp.partial
+    next if text.to_s.strip.empty?
+    if final && (entry = parse_line(text, cfg))
+      queue_append(cfg['queue_file'], entry)
     else
       print "\r…#{text.ljust(40)}"
     end
   end
-
-  ffmpeg.close
-  Process.wait(ffmpeg.pid)
-
-  # cleanup
-  at_exit do
-    Vosk.vosk_recognizer_free(rec_ptr)
-    Vosk.vosk_model_free(model_ptr)
-  end
+  io.close
+  Process.wait(io.pid)
+  at_exit{ sp.free }
 end
 
-# ---------- entrypoint -------------------------------------------------------
-run_server(load_config)
+# ---------- standalone test ----------------------------------------------
+if __FILE__ == $0
+  if ARGV.first && File.extname(ARGV.first) == '.wav'
+    sp = SpeechProcessor.new(DEFAULT_CFG['model_glob'], DEFAULT_CFG['sample_rate'])
+    File.open(ARGV.first, 'rb') do |f|
+      f.read(4096) until f.eof? do |chunk|
+        sp.feed(chunk)
+      end
+    end
+    text = sp.final
+    puts "Transcribed: #{text}"
+    p parse_line(text, load_config)
+    sp.free
+  else
+    run_server(load_config)
+  end
+end
