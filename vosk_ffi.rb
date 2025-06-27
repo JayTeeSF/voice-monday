@@ -8,10 +8,14 @@ module Vosk
   spec = Gem.loaded_specs['vosk'] || Gem::Specification.find_by_name('vosk') rescue nil
   abort '❌ Vosk gem not found — add `gem "vosk"` to your Gemfile and run `bundle install`' unless spec
 
-  # Search within the gem directory for any .dylib (e.g. libvosk.dylib)
-  dylibs = Dir.glob(File.join(spec.full_gem_path, '**', '*.dylib'))
-  lib_path = ENV['VOSK_LIBRARY_PATH'] || dylibs.find { |p| File.basename(p).downcase.include?('vosk') }
-  abort "❌ Vosk native library not found under #{spec.full_gem_path}" unless lib_path
+  # Possible library locations: ENV override, gem directory, project lib/vosk
+  candidates = []
+  candidates << ENV['VOSK_LIBRARY_PATH'] if ENV['VOSK_LIBRARY_PATH']
+  candidates.concat Dir.glob(File.join(spec.full_gem_path, '**', '*.dylib'))
+  # include project-local native library under lib/vosk/**
+  candidates.concat Dir.glob(File.join(__dir__, 'lib', 'vosk', '**', '*.dylib'))
+  lib_path = candidates.compact.find { |p| File.basename(p).downcase.include?('vosk') }
+  abort "❌ Vosk native library not found; searched: #{candidates.join(', ')}" unless lib_path
 
   ffi_lib lib_path
 

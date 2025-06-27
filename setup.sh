@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 
 headline() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
-# ── Prevent Homebrew auto-update & Git prompts ────────────────────────────────
+# ── Prevent Homebrew auto-update & Git prompts ───────────────────────────────
 export HOMEBREW_NO_AUTO_UPDATE=1
 export GIT_TERMINAL_PROMPT=0
 
@@ -19,22 +19,18 @@ fi
 # ── 2. rbenv & Ruby from .ruby-version ───────────────────────────────────────
 if [[ -f .ruby-version ]]; then
   RUBY_VERSION="$(<.ruby-version)"
-  # install rbenv + ruby-build if missing
   if ! command -v rbenv &>/dev/null; then
     headline "Installing rbenv + ruby-build…"
     brew install rbenv ruby-build
   fi
   export PATH="$(brew --prefix rbenv)/bin:$PATH"
   eval "$(rbenv init -)"
-
-  # install & activate exact version
   if ! rbenv versions --bare | grep -qx "$RUBY_VERSION"; then
     headline "Installing Ruby $RUBY_VERSION via rbenv…"
     rbenv install -s "$RUBY_VERSION"
   fi
   rbenv local "$RUBY_VERSION"
 else
-  # fallback: Ruby ≥ 3.3.4 via Homebrew
   if ! ruby -e 'exit Gem::Version.new(RUBY_VERSION) >= Gem::Version.new("3.3.4")'; then
     headline "Installing Ruby 3.3 via Homebrew…"
     brew install ruby@3.3
@@ -50,7 +46,7 @@ if ! command -v brew &>/dev/null; then
 fi
 eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv)"
 
-# ── 4. Formulae (idempotent) ──────────────────────────────────────────────────
+# ── 4. Formulae (idempotent) ─────────────────────────────────────────────────
 headline "Installing Homebrew formulae…"
 for pkg in ffmpeg jq wget unzip; do
   if ! brew list --formula | grep -qx "$pkg"; then
@@ -66,7 +62,7 @@ gem list -i bundler --no-versions &>/dev/null || gem install bundler --no-docume
 if [[ -f Gemfile ]]; then
   bundle check || bundle install --jobs 4
 else
-  for g in ffi tty-command vosk; do
+  for g in ffi tty-command; do
     gem list -i "$g" --no-versions &>/dev/null || gem install "$g" --no-document
   done
 fi
@@ -81,5 +77,20 @@ if [[ ! -d $MODEL_DIR ]]; then
   unzip -q models/model.zip -d models
   rm models/model.zip
 fi
+
+# ── 7. Vosk C library (libvosk.dylib) ─────────────────────────────────────────
+VOSK_VERSION="0.3.42"
+LIB_DIR="lib/vosk"
+if [[ ! -f "$LIB_DIR/libvosk.dylib" ]]; then
+  headline "Fetching Vosk native library (libvosk.dylib)…"
+  mkdir -p "$LIB_DIR"
+  ZIP_URL="https://github.com/alphacep/vosk-api/releases/download/v${VOSK_VERSION}/vosk-osx-${VOSK_VERSION}.zip"
+  curl -L "$ZIP_URL" -o "$LIB_DIR/vosk-native.zip"
+  unzip -q "$LIB_DIR/vosk-native.zip" -d "$LIB_DIR"
+  rm "$LIB_DIR/vosk-native.zip"
+fi
+
+# ── 8. Export FFI library path ───────────────────────────────────────────────
+export VOSK_LIBRARY_PATH="$(pwd)/$LIB_DIR/libvosk.dylib"
 
 headline "✔  Setup complete — run ./voice_task_server.rb to start listening."
