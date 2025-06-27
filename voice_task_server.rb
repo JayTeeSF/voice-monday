@@ -15,6 +15,7 @@ require 'json'
 require 'date'
 require 'fileutils'
 require 'vosk'
+require 'vosk/model'    # <= explicit load (newer gem versions need this)
 require 'tty/command'
 
 CONFIG_PATH  = 'config.json'.freeze
