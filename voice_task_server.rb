@@ -18,8 +18,6 @@ require 'fileutils'
 
 require_relative 'vosk_ffi'
 
-require 'tty/command'
-
 CONFIG_PATH  = 'config.json'.freeze
 
 DEFAULT_CFG = {
@@ -31,7 +29,7 @@ DEFAULT_CFG = {
   'ffmpeg_bin'     => 'ffmpeg',
   'ffmpeg_opts'    => %w[-hide_banner -loglevel panic -f avfoundation -i :DEVICE
                          -ac 1 -ar :SAMPLE -f s16le -],
-                         'due_default'    => 'next_friday'             # or 'none'
+  'due_default'    => 'next_friday'             # or 'none'
 }.freeze
 
 # ---------------------------------------------------------------------------
@@ -73,7 +71,7 @@ end
 # ---------- command parser --------------------------------------------------
 def parse_create_task(line, cfg)
   rx = /
-  \b(?:add|create)\s+(?:a\s+)?task\s+to\s+
+    \b(?:add|create)\s+(?:a\s+)?task\s+to\s+
     ['"]?([^'"]+)['"]?\s+workspace\s*(?:[:→])?\s*
     (.+?)                                   # task (lazy) …
     (?:\s+by\s+([a-z0-9,\s]+?))?            #  … optional due date
@@ -98,44 +96,50 @@ end
 # ---------- voicestream → recogniser loop -----------------------------------
 def run_server(cfg)
   model_path = Dir[cfg['model_glob']].first or
-    abort 'Vosk model not found — run setup.sh'
+               abort 'Vosk model not found — run setup.sh'
 
   queue_init(cfg['queue_file'])
 
-  # instantiate via our FFI bindings
-  #model = Vosk::Model.new(model_path)
-  #rec   = Vosk::Recognizer.new(model, cfg['sample_rate'])
+  # instantiate via FFI
   model_ptr = Vosk.vosk_model_new(model_path)
   rec_ptr   = Vosk.vosk_recognizer_new(model_ptr, cfg['sample_rate'])
-  cmd       = TTY::Command.new
 
   ffmpeg_cmd = cfg['ffmpeg_opts']
     .map { |t| t == ':DEVICE' ? ":#{cfg['device_index']}" : t }
     .map { |t| t == ':SAMPLE' ? cfg['sample_rate'].to_s : t }
 
-  ffmpeg = cmd.popen([cfg['ffmpeg_bin'], *ffmpeg_cmd])
+  # spawn ffmpeg as raw IO
+  ffmpeg = IO.popen([cfg['ffmpeg_bin'], *ffmpeg_cmd], 'rb')
 
   puts '🎙️  Voice server ready — Ctrl-C to quit'
-  ffmpeg.each(4096) do |chunk|
-    #next unless rec.accept_waveform(chunk)
-    #spoken = JSON.parse(rec.result)['text']
-    # wrap the raw bytes in a pointer for FFI
-    ptr = FFI::MemoryPointer.from_string(chunk)
-    # pass pointer + length (in bytes) to recognizer
+  while (chunk = ffmpeg.read(4096))
+    ptr = FFI::MemoryPointer.new(:uchar, chunk.bytesize)
+    ptr.put_bytes(0, chunk)
+
     if Vosk.vosk_recognizer_accept_waveform(rec_ptr, ptr, chunk.bytesize)
-      # pull partial result
-      spoken = JSON.parse(Vosk.vosk_recognizer_result(rec_ptr))['text']
+      # final result (on sentence boundary)
+      json = JSON.parse(Vosk.vosk_recognizer_result(rec_ptr))
+      text = json['text'] || ''
+    else
+      # partial interim result
+      json = JSON.parse(Vosk.vosk_recognizer_partial_result(rec_ptr))
+      text = json['partial'] || ''
+    end
 
-      next if spoken.empty?
+    next if text.strip.empty?
 
-      if (entry = parse_line(spoken, cfg))
-        queue_append(cfg['queue_file'], entry)
-      else
-        puts "⚠️  Unrecognised: #{spoken.inspect}"
-      end
+    # show partials for feedback, but only queue on finals:
+    if json.key?('text')
+      queue_append(cfg['queue_file'], parse_line(text, cfg) || { unrecognised: text })
+    else
+      print "\r…#{text.ljust(40)}"
     end
   end
-  # cleanup on exit
+
+  ffmpeg.close
+  Process.wait(ffmpeg.pid)
+
+  # cleanup
   at_exit do
     Vosk.vosk_recognizer_free(rec_ptr)
     Vosk.vosk_model_free(model_ptr)
