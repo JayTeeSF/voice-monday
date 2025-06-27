@@ -5,18 +5,44 @@ cd "$(dirname "$0")"
 
 headline() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
-# ── Block Brew auto-update / Git prompts ──────────────────────────────────────
+# ── Prevent Homebrew auto-update & Git prompts ────────────────────────────────
 export HOMEBREW_NO_AUTO_UPDATE=1
 export GIT_TERMINAL_PROMPT=0
 
-# ── 1. Xcode CLI tools ────────────────────────────────────────────────────────
+# ── 1. Xcode CLI tools ───────────────────────────────────────────────────────
 if ! xcode-select -p &>/dev/null; then
   headline "Installing Xcode CLI tools…"
   xcode-select --install || true
   while ! xcode-select -p &>/dev/null; do sleep 15; done
 fi
 
-# ── 2. Homebrew ───────────────────────────────────────────────────────────────
+# ── 2. rbenv & Ruby from .ruby-version ───────────────────────────────────────
+if [[ -f .ruby-version ]]; then
+  RUBY_VERSION="$(<.ruby-version)"
+  # install rbenv + ruby-build if missing
+  if ! command -v rbenv &>/dev/null; then
+    headline "Installing rbenv + ruby-build…"
+    brew install rbenv ruby-build
+  fi
+  export PATH="$(brew --prefix rbenv)/bin:$PATH"
+  eval "$(rbenv init -)"
+
+  # install & activate exact version
+  if ! rbenv versions --bare | grep -qx "$RUBY_VERSION"; then
+    headline "Installing Ruby $RUBY_VERSION via rbenv…"
+    rbenv install -s "$RUBY_VERSION"
+  fi
+  rbenv local "$RUBY_VERSION"
+else
+  # fallback: Ruby ≥ 3.3.4 via Homebrew
+  if ! ruby -e 'exit Gem::Version.new(RUBY_VERSION) >= Gem::Version.new("3.3.4")'; then
+    headline "Installing Ruby 3.3 via Homebrew…"
+    brew install ruby@3.3
+    export PATH="$(brew --prefix ruby@3.3)/bin:$PATH"
+  fi
+fi
+
+# ── 3. Homebrew ───────────────────────────────────────────────────────────────
 if ! command -v brew &>/dev/null; then
   headline "Installing Homebrew…"
   NONINTERACTIVE=1 \
@@ -24,32 +50,28 @@ if ! command -v brew &>/dev/null; then
 fi
 eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv)"
 
-# ── 3. Ruby ≥ 3.3.4 ───────────────────────────────────────────────────────────
-if ! ruby -e 'exit Gem::Version.new(RUBY_VERSION) >= Gem::Version.new("3.3.4")'; then
-  headline "Installing Ruby 3.3…"
-  brew install ruby@3.3
-  export PATH="$(brew --prefix ruby@3.3)/bin:$PATH"
-fi
-
 # ── 4. Formulae (idempotent) ──────────────────────────────────────────────────
 headline "Installing Homebrew formulae…"
 for pkg in ffmpeg jq wget unzip; do
-  brew list --formula | grep -qx "$pkg" || { echo "› brew install $pkg"; brew install "$pkg"; }
+  if ! brew list --formula | grep -qx "$pkg"; then
+    echo "› brew install $pkg"
+    brew install "$pkg"
+  fi
 done
 
-# ── 5. Gems (idempotent, no Gemfile needed) ───────────────────────────────────
+# ── 5. Gems (idempotent, honors Gemfile) ────────────────────────────────────
 headline "Installing Ruby gems…"
 gem list -i bundler --no-versions &>/dev/null || gem install bundler --no-document
 
-if [[ -f Gemfile ]]; then                    # honour project Gemfile
+if [[ -f Gemfile ]]; then
   bundle check || bundle install --jobs 4
-else                                         # fallback: install the essentials
-  for g in vosk tty-command; do
+else
+  for g in ffi tty-command vosk; do
     gem list -i "$g" --no-versions &>/dev/null || gem install "$g" --no-document
   done
 fi
 
-# ── 6. Vosk model (≈ 40 MB) ───────────────────────────────────────────────────
+# ── 6. Vosk model (≈40 MB) ────────────────────────────────────────────────────
 MODEL_DIR="models/vosk-model-small-en-us-0.15"
 if [[ ! -d $MODEL_DIR ]]; then
   headline "Fetching Vosk English model…"
