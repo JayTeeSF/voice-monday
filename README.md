@@ -17,7 +17,7 @@ Hands‑free capture of Monday.com tasks from spoken commands.
 
 ```bash
 # clone and enter the folder
-$ git clone https://github.com/you/voice‑monday.git
+$ git clone https://github.com/jayteesf/voice‑monday.git
 $ cd voice‑monday
 
 # copy env template and add your secret(s)

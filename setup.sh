@@ -39,9 +39,15 @@ done
 
 # ── 5. Gems (idempotent, no Gemfile needed) ───────────────────────────────────
 headline "Installing Ruby gems…"
-for gem in bundler vosk tty-command; do
-  gem list -i "$gem" --no-versions &>/dev/null || gem install "$gem" --no-document
-done
+gem list -i bundler --no-versions &>/dev/null || gem install bundler --no-document
+
+if [[ -f Gemfile ]]; then                    # honour project Gemfile
+  bundle check || bundle install --jobs 4
+else                                         # fallback: install the essentials
+  for g in vosk tty-command; do
+    gem list -i "$g" --no-versions &>/dev/null || gem install "$g" --no-document
+  done
+fi
 
 # ── 6. Vosk model (≈ 40 MB) ───────────────────────────────────────────────────
 MODEL_DIR="models/vosk-model-small-en-us-0.15"

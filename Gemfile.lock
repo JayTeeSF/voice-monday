@@ -1,0 +1,28 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    dotenv (3.1.8)
+    json (2.12.2)
+    net-http (0.6.0)
+      uri
+    pastel (0.8.0)
+      tty-color (~> 0.5)
+    tty-color (0.6.0)
+    tty-command (0.10.1)
+      pastel (~> 0.8)
+    uri (1.0.3)
+    vosk (0.3.42)
+
+PLATFORMS
+  arm64-darwin-24
+  ruby
+
+DEPENDENCIES
+  dotenv
+  json
+  net-http
+  tty-command
+  vosk (~> 0.3)
+
+BUNDLED WITH
+   2.6.0.dev

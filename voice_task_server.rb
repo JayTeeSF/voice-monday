@@ -14,8 +14,19 @@
 require 'json'
 require 'date'
 require 'fileutils'
-require 'vosk'
-require 'vosk/model'    # <= explicit load (newer gem versions need this)
+
+begin
+  require 'vosk'                     # binds FFI
+  raise NameError unless defined?(Vosk::Model)
+rescue LoadError, NameError
+  # Fallback: use the dylib shipped inside the gem
+  require 'rubygems'
+  gem_lib = Gem.loaded_specs['vosk'].full_gem_path rescue nil
+  abort '❌  Vosk gem missing — run setup.sh' unless gem_lib
+  ENV['VOSK_LIBRARY_PATH'] = File.join(gem_lib, 'libvosk.dylib')
+  require 'vosk'
+end
+
 require 'tty/command'
 
 CONFIG_PATH  = 'config.json'.freeze
