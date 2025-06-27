@@ -13,7 +13,7 @@ module Vosk
   candidates << ENV['VOSK_LIBRARY_PATH'] if ENV['VOSK_LIBRARY_PATH']
   candidates.concat Dir.glob(File.join(spec.full_gem_path, '**', '*.dylib'))
   # include project-local native library under lib/vosk/**
-  candidates.concat Dir.glob(File.join(__dir__, 'lib', 'vosk', '**', '*.dylib'))
+  candidates.concat Dir.glob(File.join(Dir.pwd, 'lib', 'vosk', '**', '*.dylib'))
   lib_path = candidates.compact.find { |p| File.basename(p).downcase.include?('vosk') }
   abort "❌ Vosk native library not found; searched: #{candidates.join(', ')}" unless lib_path
 
